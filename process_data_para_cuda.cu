@@ -7,9 +7,9 @@
 #include <queue>
 #include <cmath>
 #include <climits>
-#include <thrust/host_vector.h>
-#include <thrust/device_vector.h>
 #include <cuda.h>
+#include <stdio.h>
+#include <stdlib.h>
 using namespace std;
 
 void read_data_to_adjancy_list(string filename, map<int, vector<int> >& file_nodes, int& total_nodes){
@@ -40,8 +40,8 @@ void read_data_to_adjancy_list(string filename, map<int, vector<int> >& file_nod
     cout << "total: " << total_nodes << endl;
 }
 
-double distance(const vector<double>& v1, const vector<double>& v2){
-  double res = 0;
+float distance(const vector<float>& v1, const vector<float>& v2){
+  float res = 0;
   for(int i = 0; i < v1.size(); i++){
     res += abs(v1[i]-v2[i]);
   }
@@ -49,8 +49,8 @@ double distance(const vector<double>& v1, const vector<double>& v2){
 }
 
 //can parallel
-double distance_approaching(const vector<double>& v1, const vector<double>& v2){
-  double res = INT_MAX;
+float distance_approaching(const vector<float>& v1, const vector<float>& v2){
+  float res = INT_MAX;
   for(int i = 0; i < v1.size(); i++){
     if(abs(v1[i]-v2[i]) < res){
       res = abs(v1[i]-v2[i]);
@@ -59,7 +59,7 @@ double distance_approaching(const vector<double>& v1, const vector<double>& v2){
   return res;
 }
 
-void write(ofstream& file, vector<double> v){
+void write(ofstream& file, vector<float> v){
   for(int i = 0; i < v.size(); i++){
     if(v[i] != 0)
     file << i << ": " << v[i] << "\n";
@@ -74,20 +74,20 @@ int find_nearest_power_of_2(int num){
 	return tmp;
 }
 
-/*vector<double> serial_pr(map<int, vector<int> >& file_nodes, double alp, int num_threads, int total_nodes){
-  vector<double> pr_new(total_nodes, 0);
-  vector<double> pr_old(total_nodes, 1.0/sqrt(total_nodes));
+/*vector<float> serial_pr(map<int, vector<int> >& file_nodes, float alp, int num_threads, int total_nodes){
+  vector<float> pr_new(total_nodes, 0);
+  vector<float> pr_old(total_nodes, 1.0/sqrt(total_nodes));
   vector<M*> locks(total_nodes);
   for(int i = 0; i < total_nodes; i++){
 	locks[i] = new M;
   }
-  double threshold = 10e-9;
-  double dangling_value = 0;
-  double alpha = alp;
+  float threshold = 10e-9;
+  float dangling_value = 0;
+  float alpha = alp;
   int c = 1;
   int nthreads, th_id;
-  double sum = 0;
-  double error = 0;
+  float sum = 0;
+  float error = 0;
   omp_set_num_threads(num_threads);
   int remain_idx = num_threads * (total_nodes/num_threads);
   int ri;
@@ -133,7 +133,7 @@ int find_nearest_power_of_2(int num){
 		    }
 		//cout << locks.size() << ", " << d << endl;
 		    locks[d]->Lock();
-		    pr_new[d] += alpha * pr_old[i] / double(file_nodes[i].size());
+		    pr_new[d] += alpha * pr_old[i] / float(file_nodes[i].size());
 		    locks[d]->Unlock();
 		  }
 		}
@@ -158,7 +158,7 @@ int find_nearest_power_of_2(int num){
 		      continue;
 		    }
 		    locks[d]->Lock();
-		    pr_new[d] += alpha * pr_old[i] / double(file_nodes[i].size());
+		    pr_new[d] += alpha * pr_old[i] / float(file_nodes[i].size());
 		    locks[d]->Unlock();
 		  }
 		}
@@ -173,9 +173,9 @@ int find_nearest_power_of_2(int num){
 	    ri = remain_idx;
 	    #pragma omp barrier
 	    
-	    double sum_p = 0;
+	    float sum_p = 0;
 	    for(int i = th_id * num_per_thread; i < end; i++){
-		pr_new[i] += (dangling_value + 1 - alpha) / double(total_nodes);
+		pr_new[i] += (dangling_value + 1 - alpha) / float(total_nodes);
 		sum_p += pr_new[i]*pr_new[i];
 	    }
 	    while(ri < total_nodes){
@@ -183,7 +183,7 @@ int find_nearest_power_of_2(int num){
 		int i = ri;
 		ri++;
 		mri.Unlock();
-		pr_new[i] += (dangling_value + 1 - alpha) / double(total_nodes);
+		pr_new[i] += (dangling_value + 1 - alpha) / float(total_nodes);
 		sum_p += pr_new[i]*pr_new[i];
 	    }
 	    msum.Lock();
@@ -207,7 +207,7 @@ int find_nearest_power_of_2(int num){
 	    ri = remain_idx;
 	    #pragma omp barrier
 
-	    double error_p = 0;
+	    float error_p = 0;
 	    for(int i = th_id * num_per_thread; i < end; ++i){
 	      error_p += abs(pr_new[i]-pr_old[i]);
 	    }
@@ -249,32 +249,16 @@ int find_nearest_power_of_2(int num){
   return pr_new;
 }*/
 
-struct Lock
-{
-    int mutex;
-
-    __device__ void lock(){
-        while(atomicCAS(&mutex, 0, 1) != 0);
-    }
-
-    __device__ void unlock(){
-        atomicExch(&mutex, 0);
-    }
-};
-
-__global__ void init_lock(Lock *lock, int node_num)
-{
-	int idx = threadIdx.x + blockIdx.x * blockDim.x;
-	int range = blockDim.x * gridDim.x;
-
-	while(idx<node_num){
-		lock[idx].mutex = 0;
-		idx += range;
-	}
-	//printf("%s", "a");
+//set pr_old to pr_new
+__global__ void calculatePR_part0(float* pr_new, float* pr_old){
+	printf("%s\n", "begin of calculate PR4");
+	//printf("%d\n", filenodes->size);
+	unsigned int id = blockIdx.x * blockDim.x + threadIdx.x;
+	pr_old[id] = pr_new[id];
 }
 
-__global__ void calculatePR_part1(double* pr_new, double* pr_old, int* nodes_range, int* nodes_dest, const size_t n, const size_t num_sides, double* dv, const double alpha, Lock* l){
+//basic calculate
+__global__ void calculatePR_part1(float* pr_new, float* pr_old, int* nodes_range, int* nodes_dest, const size_t n, const size_t num_sides, float* dv, const float alpha){
 	printf("%s\n", "begin of calculate PR1");
 	//printf("%d\n", filenodes->size);
 	unsigned int id = blockIdx.x * blockDim.x + threadIdx.x;
@@ -285,34 +269,83 @@ __global__ void calculatePR_part1(double* pr_new, double* pr_old, int* nodes_ran
 		
 		if(end == start){ //dangling nodes
 			printf("%s, %d, %d, %d\n", "this is in", id, start, end);
-			//add lock
-			l[n].lock();
-			*dv += alpha * pr_old[id];
-			l[n].unlock();
+			atomicAdd(dv, alpha * pr_old[id]);	
+			/*for(int i = 0; i < n; i++){
+				printf("%s, %d, %f\n", "pr_old", i, pr_old[i]);
+			}*/		
 		}
 		else{
 			//printf("%s, %d, %d, %d\n", "this is in", id, start, end);
 			for(int i = start; i < end; ++i){
 				int d = nodes_dest[i];
-				printf("%s, %d, %d, %d, %s, %d, %d, %s, %d\n", "this is in", id, start, end, "i and d: ", i, d, "pr_old[i]: ", pr_old[i]);
-				//add lock
-				//l[d].lock();
-				pr_new[d] += alpha * pr_old[i] / (end - start);
-				//l[d].unlock();
+				float tmpold = pr_old[id];
+				float tmp = alpha * tmpold / (end - start);
+				//printf("%s, %d, %d, %d, %s, %d, %s, %d, %s, %f, %s, %f\n", "this is in", id, start, end, "d: ", d, "pr_new + d: ", pr_new + d, "alpha * pr_old[id] / (end - start): ", tmp, "tmpold: ", tmpold);
+				atomicAdd(pr_new + d, tmp);
 			}
+			/*for(int i = 0; i < n; i++){
+				printf("%s, %d, %f\n", "pr_old", i, pr_old[i]);
+			}*/
 		}
-		__syncthreads();
+		//__syncthreads();
 	}
 	else{
 		pr_new[id] = 0;
 	}
 }
 
-__global__ void calculatePR_part2(double* pr_new, double* pr_old, int* nodes_range, int* nodes_dest, const size_t n, const size_t num_sides, double* dv){
-
+//add dangling value
+__global__ void calculatePR_part2(float* pr_new, const size_t n, float* dv, const float alpha){
+	printf("%s\n", "begin of calculate PR2");
+	//printf("%d\n", filenodes->size);
+	unsigned int id = blockIdx.x * blockDim.x + threadIdx.x;
+	if(id < n){
+		pr_new[id] += (*dv + 1 - alpha) / float(n);
+	}
+	else{
+		pr_new[id] = 0;	
+	}
 }
 
-__global__ void block_sum(const double *input, double *per_block_res, const size_t n){
+//calculate square sum of all pr_new
+__global__ void calculatePR_part3(float* pr_new, float* per_block_res, const size_t n){
+	printf("%s\n", "begin of calculate PR3");	
+	extern __shared__ float sdata[];
+	unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+	float x = 0;
+	if(i < n) x = pr_new[i];
+	sdata[threadIdx.x] = x;
+	int idx = ceil(blockDim.x/2.0);	
+	__syncthreads();
+
+	while(idx != 0){
+		if(i + idx < n && threadIdx.x < idx) sdata[threadIdx.x] = sdata[threadIdx.x] * sdata[threadIdx.x] + sdata[threadIdx.x + idx] * sdata[threadIdx.x + idx];
+		idx /= 2;
+		__syncthreads();
+	}
+
+	if(threadIdx.x == 0){
+		per_block_res[blockIdx.x] = sdata[0];
+		printf("%d, %f\n", blockIdx.x, per_block_res[blockIdx.x]);
+	}
+}
+
+__global__ void calculatePR_part4(float* pr_new, const size_t n, const float num){
+	printf("%s\n", "begin of calculate PR4");
+	//printf("%d\n", filenodes->size);
+	unsigned int id = blockIdx.x * blockDim.x + threadIdx.x;
+	if(id < n){
+		pr_new[id] /= num;
+	}
+	else{
+		pr_new[id] = 0;	
+	}
+}
+
+
+
+__global__ void block_sum(const float *input, float *per_block_res, const size_t n){
 	extern __shared__ float sdata[];
 	unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -330,17 +363,17 @@ __global__ void block_sum(const double *input, double *per_block_res, const size
 
 	if(threadIdx.x == 0){
 		per_block_res[blockIdx.x] = sdata[0];
-		printf("%d, %d\n", blockIdx.x, per_block_res[blockIdx.x]);
+		printf("%d, %f\n", blockIdx.x, per_block_res[blockIdx.x]);
 	}
 }
 
-__global__ void setValue(double* input, const size_t n, double num){
+__global__ void setValue(float* input, const size_t n, float num){
 	unsigned int id = blockIdx.x * blockDim.x + threadIdx.x;
 	if(id < n) input[id] = num;
 	else input[id] = 0;
 }
 
-__global__ void diffPr(double* input1, double* input2, double* diff, const size_t n){
+__global__ void diffPr(float* input1, float* input2, float* diff, const size_t n){
 	unsigned int id = blockIdx.x * blockDim.x + threadIdx.x;
 	if(id < n) diff[id] = input1[id] > input2[id] ? (input1[id] - input2[id]) : (input2[id] - input1[id]);
 	else diff[id] = 0;
@@ -348,13 +381,13 @@ __global__ void diffPr(double* input1, double* input2, double* diff, const size_
 
 class com{
 public:
-  bool operator()(const pair<double, int>& p1, const pair<double, int>& p2){
+  bool operator()(const pair<float, int>& p1, const pair<float, int>& p2){
     return p1.first < p2.first;
   }
 };
 
 int main(int argc, char* argv[]){
-	double alp = 0.85;
+	float alp = 0.85;
 	int num_threads = 1;
 	if(argc == 3){
 	alp = atof(argv[1]);
@@ -364,20 +397,20 @@ int main(int argc, char* argv[]){
 	cout << "you don't input appropriate parameters, you can" << endl;
 	cout << "1) input nothing(default alpha is 0.85, and default num of threads is 1);" << endl;
 	cout << "2) input alpha and num of threads" << endl;
-	cout << "alpha should be a double number in range (0, 1), and num of threads should be a number in range [1, 4]" << endl;
+	cout << "alpha should be a float number in range (0, 1), and num of threads should be a number in range [1, 4]" << endl;
 	return -1;
 	}
 	if(alp <= 0 || alp >= 1 || num_threads < 0){
 	cout << "you don't input appropriate parameters, you can" << endl;
 	cout << "1) input nothing(default alpha is 0.85, and default num of threads is 1);" << endl;
 	cout << "2) input alpha and num of threads" << endl;
-	cout << "alpha should be a double number in range (0, 1), and num of threads should be a number in range [1, 4]" << endl;
+	cout << "alpha should be a float number in range (0, 1), and num of threads should be a number in range [1, 4]" << endl;
 	return -1;
 	}
 
 	int total_nodes = 6;
-	double threshold = 10e-9;
-	double alpha = 0.85;
+	float threshold = 10e-6;
+	float alpha = 0.85;
 	//map<int, vector<int> >* file_nodes;
 	//(*file_nodes)[1].push_back(2);	
 	//vector<FileNode*> file_nodes;
@@ -410,7 +443,7 @@ int main(int argc, char* argv[]){
 	cudaMalloc((void**)&d_file_nodes, sizeof(FileNode*) * total_nodes);
 	cudaMemcpy(d_file_nodes, file_nodes, sizeof(FileNode*) * total_nodes, cudaMemcpyHostToDevice);*/
 	
-	int num_sides = 14;
+	int num_sides = 10;
 	int nodes_range[total_nodes + 1]; //nodes_range[idx] = start_idx means dest of node idx starts from nodes_dest[start_idx] to nodes_dest[nodes_range[idx+1]-1]; last ele should be num_sides
 	int nodes_dest[num_sides]; //dest nodes
 	int *d_nodes_range, *d_nodes_dest;
@@ -421,102 +454,148 @@ int main(int argc, char* argv[]){
 	cudaMalloc((void**)&d_nodes_dest, sizeof(int) * num_sides);
 	cudaMemcpy(d_nodes_dest, nodes_dest, sizeof(int) * num_sides, cudaMemcpyHostToDevice);
 	
-	int block_size = 8;
-	int block_num = (int)ceil(total_nodes/double(block_size));
+	int block_size = 2;
+	int block_num = (int)ceil(total_nodes/float(block_size));
 	cout << "block_num is " << block_num << endl; 
 
 	//allocate d_pr_old, d_pr_new on GPU
-	double *d_pr_old, *d_diff, *d_pr_new;
-	double pr_old[block_size * block_num], pr_new[block_size * block_num];
-	cudaMalloc((void**)&d_pr_old, sizeof(double) * block_num * block_size); 
-	cudaMalloc((void**)&d_pr_new, sizeof(double) * block_num * block_size); 
-	cudaMalloc((void**)&d_diff, sizeof(double) * block_num * block_size);
+	float *d_pr_old, *d_diff, *d_pr_new;
+	float pr_old[block_size * block_num], pr_new[block_size * block_num];
+	cudaMalloc((void**)&d_pr_old, sizeof(float) * block_num * block_size); 
+	cudaMalloc((void**)&d_pr_new, sizeof(float) * block_num * block_size); 
+	cudaMalloc((void**)&d_diff, sizeof(float) * block_num * block_size);
 
 	//set pr_old to 1/sqrt(n) using GPU and pr_new to 0
-	double num = 1.0/sqrt(total_nodes);
-	setValue<<<block_num, block_size>>>(d_pr_old, total_nodes, num);
+	float num = 1.0/sqrt(total_nodes);
+	setValue<<<block_num, block_size>>>(d_pr_new, total_nodes, num);
 	
-	double debug_pr_old[block_size * block_num], debug_pr_new[block_size * block_num];
-	cudaMemcpy(debug_pr_old, d_pr_old, sizeof(double) * block_num * block_size, cudaMemcpyDeviceToHost);
-	cout << "pr_old: " << endl;
+	float debug_pr_old[block_size * block_num], debug_pr_new[block_size * block_num];
+	cudaMemcpy(debug_pr_new, d_pr_new, sizeof(float) * block_num * block_size, cudaMemcpyDeviceToHost);
+	cout << "pr_pre: " << endl;
 	for(int i = 0; i < block_num * block_size; ++i){
-		cout << i << ": " << debug_pr_old[i] << endl;
+		cout << i << ": " << debug_pr_new[i] << endl;
 	}
 	num = 0;
-	setValue<<<block_num, block_size>>>(d_pr_new, total_nodes, num);
+	setValue<<<block_num, block_size>>>(d_pr_old, total_nodes, num);
 	
 	while(1){
 		//calculate if the condition now can exit
 		diffPr<<<block_num, block_size>>>(d_pr_old, d_pr_new, d_diff, total_nodes);
 		
-		double debug_diff[block_num * block_size];
-		cudaMemcpy(debug_diff, d_diff, sizeof(double) * block_num * block_size, cudaMemcpyDeviceToHost);
+		float debug_diff[block_num * block_size];
+		cudaMemcpy(debug_diff, d_diff, sizeof(float) * block_num * block_size, cudaMemcpyDeviceToHost);
 		cout << "diff: " << endl;
 		for(int i = 0; i < block_num * block_size; ++i){
 			cout << i << ": " << debug_diff[i] << endl;
 		}
 		cout << endl;
 
-		double *d_sum, sum, *d_partial_sum;
-		cudaMalloc((void**)&d_sum, sizeof(double));	
-		cudaMalloc((void**)&d_partial_sum, sizeof(double) * (block_num));	
-		block_sum<<<block_num, block_size, block_size * sizeof(double)>>>(d_diff, d_partial_sum, total_nodes);
+		float *d_sum, sum, *d_partial_sum;
+		cudaMalloc((void**)&d_sum, sizeof(float));	
+		cudaMalloc((void**)&d_partial_sum, sizeof(float) * (block_num));	
+		block_sum<<<block_num, block_size, block_size * sizeof(float)>>>(d_diff, d_partial_sum, total_nodes);
 
-		double debug_ps[block_num];
-		cudaMemcpy(debug_ps, d_partial_sum, sizeof(double) * block_num, cudaMemcpyDeviceToHost);
+		float debug_ps[block_num];
+		cudaMemcpy(debug_ps, d_partial_sum, sizeof(float) * block_num, cudaMemcpyDeviceToHost);
 		cout << "partial sum: " << endl;
 		for(int i = 0; i < block_num ; ++i){
 			cout << i << ": " << debug_ps[i] << endl;
 		}
 
 		cout << "block_num and find_nearest_power_of_2(block_num): " << block_num << ", " << find_nearest_power_of_2(block_num) << endl;
-		block_sum<<<1, find_nearest_power_of_2(block_num), find_nearest_power_of_2(block_num) * sizeof(double)>>>(d_partial_sum, d_sum, block_num);
-		cudaMemcpy(&sum, d_sum, sizeof(double), cudaMemcpyDeviceToHost);
-		cout << sum << endl;
+		block_sum<<<1, find_nearest_power_of_2(block_num), find_nearest_power_of_2(block_num) * sizeof(float)>>>(d_partial_sum, d_sum, block_num);
+		cudaMemcpy(&sum, d_sum, sizeof(float), cudaMemcpyDeviceToHost);
+		cout << "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeerror:" << sum << endl;
 		if(sum < threshold) break; //if distance smaller than threshold, done!
 		//break;	
 		
+		//finish one iterations
+		cout << "before cPR0" << endl;
+		calculatePR_part0<<<block_num, block_size>>>(d_pr_new, d_pr_old);
+		cout << "after cPR0" << endl;
+
+		cudaMemcpy(debug_pr_old, d_pr_old, sizeof(float) * block_num * block_size, cudaMemcpyDeviceToHost);
+		cout << "pr_old: " << endl;
+		for(int i = 0; i < block_num * block_size; ++i){
+			cout << i << ": " << debug_pr_old[i] << endl;
+		}
+
 		//set pr_new to 0
 		num = 0;
 		setValue<<<block_num, block_size>>>(d_pr_new, total_nodes, num);
 
 		//set dangling value
-		double dangling_value = 0;
-		double* d_dv;
-		cudaMalloc((void**)&d_dv, sizeof(double));
-		cudaMemcpy(d_dv, &dangling_value, sizeof(double), cudaMemcpyHostToDevice);
+		float dangling_value = 0;
+		float* d_dv;
+		cudaMalloc((void**)&d_dv, sizeof(float));
+		cudaMemcpy(d_dv, &dangling_value, sizeof(float), cudaMemcpyHostToDevice);
 		
-		Lock *d_l;
-		cudaMalloc((void**)&d_l, (total_nodes + 1) * sizeof(Lock));
-	
-		init_lock<<<block_num, block_size>>>(d_l, total_nodes+1);
+		cudaMemcpy(debug_pr_old, d_pr_old, sizeof(float) * block_num * block_size, cudaMemcpyDeviceToHost);
+		cout << "pr_old: " << endl;
+		for(int i = 0; i < block_num * block_size; ++i){
+			cout << i << ": " << debug_pr_old[i] << endl;
+		}
 	
 		cout << "before cPR1" << endl;
 		
-		calculatePR_part1<<<block_num, block_size, block_size * sizeof(double)>>>(d_pr_new, d_pr_old, d_nodes_range, d_nodes_dest, total_nodes, num_sides, d_dv, alpha, d_l);
+		calculatePR_part1<<<block_num, block_size, block_size * sizeof(float)>>>(d_pr_new, d_pr_old, d_nodes_range, d_nodes_dest, total_nodes, num_sides, d_dv, alpha);
 		
 		cout << "after cPR1" << endl;
 		
-		cudaMemcpy(&dangling_value, d_dv, sizeof(double), cudaMemcpyDeviceToHost);
+		cudaMemcpy(&dangling_value, d_dv, sizeof(float), cudaMemcpyDeviceToHost);
 		cout << "dangling_value: " << dangling_value << endl;
-		cudaMemcpy(debug_pr_new, d_pr_new, sizeof(double) * block_num * block_size, cudaMemcpyDeviceToHost);
+		cudaMemcpy(debug_pr_new, d_pr_new, sizeof(float) * block_num * block_size, cudaMemcpyDeviceToHost);
 		cout << "pr_new: " << endl;
 		for(int i = 0; i < block_num * block_size; ++i){
 			cout << i << ": " << debug_pr_new[i] << endl;
 		}
 		
+		cout << "before cPR2" << endl;
+		calculatePR_part2<<<block_num, block_size>>>(d_pr_new, total_nodes, d_dv, alpha);
+		cout << "after cPR2" << endl;
+	
+		cudaMemcpy(debug_pr_new, d_pr_new, sizeof(float) * block_num * block_size, cudaMemcpyDeviceToHost);
+		cout << "pr_new: " << endl;
+		for(int i = 0; i < block_num * block_size; ++i){
+			cout << i << ": " << debug_pr_new[i] << endl;
+		}
+		
+		float *d_square_sum, square_sum, *d_partial_square_sum;
+		cudaMalloc((void**)&d_square_sum, sizeof(float));	
+		cudaMalloc((void**)&d_partial_square_sum, sizeof(float) * (block_num));
+	
+		cout << "before cPR3" << endl;
+		calculatePR_part3<<<block_num, block_size, block_size * sizeof(float)>>>(d_pr_new, d_partial_square_sum, total_nodes);
+		block_sum<<<1, find_nearest_power_of_2(block_num), find_nearest_power_of_2(block_num) * sizeof(float)>>>(d_partial_square_sum, d_square_sum, block_num);
+		cout << "after cPR3" << endl;
 
-		break;
+		cudaMemcpy(&square_sum, d_square_sum, sizeof(float), cudaMemcpyDeviceToHost);
+		cout << "square_sum: "  << square_sum << endl;
+		
+		cout << "before cPR4" << endl;
+		float num = sqrt(square_sum);
+		calculatePR_part4<<<block_num, block_size>>>(d_pr_new, total_nodes, num);
+		cout << "after cPR4" << endl;
+		
+		cudaMemcpy(debug_pr_new, d_pr_new, sizeof(float) * block_num * block_size, cudaMemcpyDeviceToHost);
+		cout << "pr_new: " << endl;
+		for(int i = 0; i < block_num * block_size; ++i){
+			cout << i << ": " << debug_pr_new[i] << endl;
+		}
+
+		
+
+		//break;
 	}
 	
-	//cudaMalloc((void**)&d_diff, sizeof(double) * block_num * block_size);
-	//cudaMemcpy(d_diff, pr_old, sizeof(double) * block_num * block_size, cudaMemcpyHostToDevice);
+	//cudaMalloc((void**)&d_diff, sizeof(float) * block_num * block_size);
+	//cudaMemcpy(d_diff, pr_old, sizeof(float) * block_num * block_size, cudaMemcpyHostToDevice);
 
 	
 
-	//double threshold = 10e-9;
+	//float threshold = 10e-9;
 	
-	//pr<<<block_num, block_size, block_size * sizeof(double)>>>(d_file_nodes, total_nodes, threshold, d_pr_old, d_diff);
+	//pr<<<block_num, block_size, block_size * sizeof(float)>>>(d_file_nodes, total_nodes, threshold, d_pr_old, d_diff);
 
 	//cudaMemcpy(file_nodes, d_file_nodes, sizeof(file_nodes) * total_nodes, cudaMemcpyDeviceToHost);
 	//cout << file_nodes[0].getId() << endl;
@@ -535,7 +614,7 @@ int main(int argc, char* argv[]){
 
 
 
-	/*priority_queue<pair<double, int>, vector<pair<double, int> >, com > pq;
+	/*priority_queue<pair<float, int>, vector<pair<float, int> >, com > pq;
 	for(int i = 0; i < pr.size(); i++){
 	pq.push(make_pair(pr[i], i+1));
 	}
